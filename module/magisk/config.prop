@@ -1,0 +1,14 @@
+# gesture_switch configuration. Edit in /data/adb/modules/gesture_switch/config.prop
+# and reboot to apply.
+
+# Navigation mode per fold state: gestural | threebutton | twobutton
+folded_mode=threebutton
+open_mode=gestural
+
+# Device state ids that count as folded, comma-separated. Leave empty to auto-detect.
+# Find them with `adb shell cmd device_state print-states` and
+# `adb shell dumpsys device_state` while folding.
+folded_states=
+
+# Wait this long (ms) for the fold state to settle before switching.
+debounce_ms=400

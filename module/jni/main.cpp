@@ -1,22 +1,24 @@
-/* Based on the Zygisk module sample by John "topjohnwu" Wu (0BSD).
+/* gesture_switch: native Zygisk loader.
  *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted.
+ * Apps:          nothing is done; the library asks to be unloaded.
+ * system_server: classes.dex and config.prop are read from the module directory in
+ *                preServerSpecialize (the only time the module dir is reachable; all fds
+ *                must be closed before returning), then in postServerSpecialize the dex is
+ *                loaded with InMemoryDexClassLoader and Entry.start(config, late) is called.
+ *                All real work happens in Java; no JNI natives or hooks are installed, so
+ *                the library is dlclose'd afterwards.
  *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
- * REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
- * INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
- * LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
- * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
- * PERFORMANCE OF THIS SOFTWARE.
+ * Anything that throws here would crash system_server (= bootloop), so every JNI call is
+ * followed by an exception check and failures only log.
+ *
+ * Based on the Zygisk module sample by John "topjohnwu" Wu (0BSD).
  */
 
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
-#include <sys/socket.h>
-#include <sys/time.h>
+#include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <android/log.h>
 
@@ -27,32 +29,75 @@ using zygisk::AppSpecializeArgs;
 using zygisk::ServerSpecializeArgs;
 
 #define LOG_TAG "GestureSwitch"
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 
-// Read or write exactly `len` bytes, retrying on EINTR and short transfers.
-static bool read_full(int fd, void *buf, size_t len) {
-    auto *p = static_cast<char *>(buf);
-    while (len > 0) {
-        ssize_t n = TEMP_FAILURE_RETRY(read(fd, p, len));
-        if (n == 0) errno = ECONNRESET;  // peer closed before sending everything
-        if (n <= 0) return false;
-        p += n;
-        len -= static_cast<size_t>(n);
+static constexpr const char *kDexName = "classes.dex";
+static constexpr const char *kConfigName = "config.prop";
+static constexpr const char *kEntryClass = "io.github.misaka20002.gestureswitch.Entry";
+// NeoZygisk sets this runtime flag when injecting into an already running system_server.
+static constexpr jint kLateInjectFlag = 1 << 30;
+static constexpr size_t kMaxFileSize = 16 * 1024 * 1024;
+
+struct Buffer {
+    char *data = nullptr;
+    size_t size = 0;
+
+    void reset() {
+        free(data);
+        data = nullptr;
+        size = 0;
     }
-    return true;
+};
+
+// Read a whole file relative to dirfd into a NUL-terminated heap buffer. The fd is always closed.
+// Returns nullptr on success, otherwise a description of what failed.
+static const char *read_file_at(int dirfd, const char *name, Buffer &out) {
+    int fd = openat(dirfd, name, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return strerror(errno);
+
+    const char *error = nullptr;
+    struct stat st{};
+    if (fstat(fd, &st) != 0) {
+        error = strerror(errno);
+    } else if (st.st_size <= 0) {
+        error = "empty file";
+    } else if (static_cast<size_t>(st.st_size) > kMaxFileSize) {
+        error = "file too large";
+    } else {
+        size_t size = static_cast<size_t>(st.st_size);
+        auto *buf = static_cast<char *>(malloc(size + 1));
+        if (!buf) {
+            error = "out of memory";
+        } else {
+            size_t done = 0;
+            while (done < size) {
+                ssize_t n = TEMP_FAILURE_RETRY(read(fd, buf + done, size - done));
+                if (n < 0) error = strerror(errno);
+                if (n <= 0) break;
+                done += static_cast<size_t>(n);
+            }
+            if (done == size) {
+                buf[size] = '\0';
+                out.data = buf;
+                out.size = size;
+            } else {
+                if (!error) error = "short read";
+                free(buf);
+            }
+        }
+    }
+    close(fd);
+    return error;
 }
 
-static bool write_full(int fd, const void *buf, size_t len) {
-    auto *p = static_cast<const char *>(buf);
-    while (len > 0) {
-        // MSG_NOSIGNAL: a peer that already went away must not SIGPIPE the root daemon.
-        ssize_t n = TEMP_FAILURE_RETRY(send(fd, p, len, MSG_NOSIGNAL));
-        if (n <= 0) return false;
-        p += n;
-        len -= static_cast<size_t>(n);
+// NewStringUTF needs valid modified UTF-8 (CheckJNI aborts otherwise); the config is plain
+// ASCII, so replace anything else.
+static void sanitize_ascii(Buffer &buf) {
+    for (size_t i = 0; i < buf.size; ++i) {
+        auto c = static_cast<unsigned char>(buf.data[i]);
+        if (c >= 0x80 || (c < 0x20 && c != '\n' && c != '\r' && c != '\t')) buf.data[i] = '?';
     }
-    return true;
 }
 
 class GestureSwitch : public zygisk::ModuleBase {
@@ -62,77 +107,149 @@ public:
         this->env = env;
     }
 
-    void preAppSpecialize(AppSpecializeArgs *args) override {
-        // Use JNI to fetch our process name
-        const char *process = nullptr;
-        if (args->nice_name) {
-            process = env->GetStringUTFChars(args->nice_name, nullptr);
-        }
-        preSpecialize(process ? process : "<unknown>");
-        if (process) {
-            env->ReleaseStringUTFChars(args->nice_name, process);
-        }
+    void preAppSpecialize(AppSpecializeArgs *) override {
+        // Nothing to do in app processes.
+        api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
     }
 
     void preServerSpecialize(ServerSpecializeArgs *args) override {
-        preSpecialize("system_server");
+        late = (args->runtime_flags & kLateInjectFlag) != 0;
+
+        int dirfd = api->getModuleDir();
+        if (dirfd < 0) {
+            LOGW("getModuleDir failed");
+            return;
+        }
+        if (const char *error = read_file_at(dirfd, kDexName, dex)) {
+            LOGW("cannot read %s: %s", kDexName, error);
+        }
+        if (!read_file_at(dirfd, kConfigName, config)) {  // optional, defaults otherwise
+            sanitize_ascii(config);
+        }
+        close(dirfd);
+    }
+
+    void postServerSpecialize(const ServerSpecializeArgs *) override {
+        if (dex.data) {
+            loadDex();
+        }
+        dex.reset();
+        config.reset();
+        api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
     }
 
 private:
     Api *api = nullptr;
     JNIEnv *env = nullptr;
+    Buffer dex;
+    Buffer config;
+    bool late = false;
 
-    void preSpecialize(const char *process) {
-        // Demonstrate connecting to the companion process:
-        // we ask the companion for a random number.
-        int fd = api->connectCompanion();
-        if (fd < 0) {
-            LOGW("process=[%s] connectCompanion failed", process);
-        } else {
-            // This runs in every app fork and in system_server before specialization,
-            // so never block indefinitely on the companion.
-            timeval tv{};
-            tv.tv_sec = 2;
-            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    // Returns true if no exception is pending; otherwise logs and clears it.
+    bool ok(const char *what) {
+        if (!env->ExceptionCheck()) return true;
+        jthrowable error = env->ExceptionOccurred();
+        env->ExceptionClear();
+        logThrowable(what, error);
+        if (error) env->DeleteLocalRef(error);
+        return false;
+    }
 
-            unsigned r = 0;
-            if (read_full(fd, &r, sizeof(r))) {
-                LOGD("process=[%s], r=[%u]", process, r);
-            } else {
-                LOGW("process=[%s] companion read failed: %d", process, errno);
+    // ExceptionDescribe() is useless here: on the normal boot path System.err still points to
+    // /dev/null. Log the stack trace through android.util.Log instead.
+    void logThrowable(const char *what, jthrowable error) {
+        jstring trace = nullptr;
+        jclass log = error ? env->FindClass("android/util/Log") : nullptr;
+        if (log && !env->ExceptionCheck()) {
+            jmethodID get = env->GetStaticMethodID(log, "getStackTraceString", "(Ljava/lang/Throwable;)Ljava/lang/String;");
+            if (get && !env->ExceptionCheck()) {
+                trace = static_cast<jstring>(env->CallStaticObjectMethod(log, get, error));
             }
-            close(fd);
+        }
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            trace = nullptr;
+        }
+        const char *chars = trace ? env->GetStringUTFChars(trace, nullptr) : nullptr;
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (chars) {
+            LOGW("%s: %s", what, chars);
+            env->ReleaseStringUTFChars(trace, chars);
+        } else {
+            LOGW("%s: exception", what);
+        }
+        if (trace) env->DeleteLocalRef(trace);
+        if (log) env->DeleteLocalRef(log);
+    }
+
+    // The system_server class loader (services.jar) is created in native SpecializeCommon before
+    // the post-fork hooks run; using it as parent lets the Java side reach com.android.server.*.
+    jobject parentClassLoader() {
+        jobject loader = nullptr;
+        jclass zygoteInit = env->FindClass("com/android/internal/os/ZygoteInit");
+        if (ok("find ZygoteInit") && zygoteInit) {
+            jmethodID get = env->GetStaticMethodID(zygoteInit, "getOrCreateSystemServerClassLoader", "()Ljava/lang/ClassLoader;");
+            if (ok("lookup getOrCreateSystemServerClassLoader") && get) {
+                loader = env->CallStaticObjectMethod(zygoteInit, get);
+                if (!ok("getOrCreateSystemServerClassLoader")) loader = nullptr;
+            }
+            env->DeleteLocalRef(zygoteInit);
+        }
+        if (loader) return loader;
+
+        jclass classLoader = env->FindClass("java/lang/ClassLoader");
+        if (ok("find ClassLoader") && classLoader) {
+            jmethodID get = env->GetStaticMethodID(classLoader, "getSystemClassLoader", "()Ljava/lang/ClassLoader;");
+            if (ok("lookup getSystemClassLoader") && get) {
+                loader = env->CallStaticObjectMethod(classLoader, get);
+                if (!ok("getSystemClassLoader")) loader = nullptr;
+            }
+            env->DeleteLocalRef(classLoader);
+        }
+        return loader;
+    }
+
+    void loadDex() {
+        jobject parent = parentClassLoader();
+        if (!parent) {
+            LOGW("no parent class loader");
+            return;
         }
 
-        // Since we do not hook any functions, we should let Zygisk dlclose ourselves
-        api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
+        jclass imdcl = env->FindClass("dalvik/system/InMemoryDexClassLoader");
+        jmethodID ctor = (ok("find InMemoryDexClassLoader") && imdcl)
+                ? env->GetMethodID(imdcl, "<init>", "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V") : nullptr;
+        jobject buffer = (ok("lookup InMemoryDexClassLoader.<init>") && ctor)
+                ? env->NewDirectByteBuffer(dex.data, static_cast<jlong>(dex.size)) : nullptr;
+        // The dex bytes are copied by ART, so the buffer can be freed afterwards.
+        jobject loader = (ok("NewDirectByteBuffer") && buffer) ? env->NewObject(imdcl, ctor, buffer, parent) : nullptr;
+        if (!ok("create InMemoryDexClassLoader") || !loader) {
+            LOGW("failed to load %s", kDexName);
+        } else {
+            jclass classLoader = env->GetObjectClass(loader);
+            jmethodID loadClass = env->GetMethodID(classLoader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+            jstring name = (ok("lookup loadClass") && loadClass) ? env->NewStringUTF(kEntryClass) : nullptr;
+            auto entry = (ok("alloc class name") && name)
+                    ? static_cast<jclass>(env->CallObjectMethod(loader, loadClass, name)) : nullptr;
+            if (ok("load entry class") && entry) {
+                jmethodID start = env->GetStaticMethodID(entry, "start", "(Ljava/lang/String;Z)V");
+                jstring cfg = (ok("lookup Entry.start") && start)
+                        ? env->NewStringUTF(config.data ? config.data : "") : nullptr;
+                if (ok("alloc config") && cfg) {
+                    env->CallStaticVoidMethod(entry, start, cfg, static_cast<jboolean>(late));
+                    if (ok("Entry.start")) LOGI("loaded (late=%d)", late);
+                    env->DeleteLocalRef(cfg);
+                }
+                env->DeleteLocalRef(entry);
+            }
+            if (name) env->DeleteLocalRef(name);
+            env->DeleteLocalRef(classLoader);
+            env->DeleteLocalRef(loader);
+        }
+        if (buffer) env->DeleteLocalRef(buffer);
+        if (imdcl) env->DeleteLocalRef(imdcl);
+        env->DeleteLocalRef(parent);
     }
 };
 
-// Runs as root in the Zygisk companion daemon. May be called concurrently on
-// multiple threads (see zygisk.hpp), so any shared state must be thread-safe.
-static void companion_handler(int client) {
-    // Per-request fd: no shared state between concurrent handlers.
-    int urandom = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
-    if (urandom < 0) {
-        LOGW("companion: cannot open /dev/urandom: %d", errno);
-        return;  // Returning without a reply tells the client we failed.
-    }
-
-    unsigned r = 0;
-    bool ok = read_full(urandom, &r, sizeof(r));
-    int err = errno;
-    close(urandom);
-    if (!ok) {
-        LOGW("companion: read /dev/urandom failed: %d", err);
-        return;
-    }
-    LOGD("companion r=[%u]", r);
-    if (!write_full(client, &r, sizeof(r))) {
-        LOGW("companion: reply failed: %d", errno);
-    }
-}
-
-// Register our module class and the companion handler function
 REGISTER_ZYGISK_MODULE(GestureSwitch)
-REGISTER_ZYGISK_COMPANION(companion_handler)
