@@ -1,0 +1,6 @@
+id=${id}
+name=${name}
+version=${versionName}
+versionCode=${versionCode}
+author=${author}
+description=${description}

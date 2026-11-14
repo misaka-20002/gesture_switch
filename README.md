@@ -1,53 +1,80 @@
-# Developing Zygisk Modules
+# gesture_switch
 
-This repository hosts a template zygisk module for developers to start developing Zygisk modules. Before developing Zygisk modules, you should first check out the official documentation for [Magisk Modules](https://topjohnwu.github.io/Magisk/guides.html). Do not fork this repository for your new module; either manually clone this repository, or press the "Use this template" button in the GitHub UI.
+A [Magisk](https://github.com/topjohnwu/Magisk) Zygisk module.
 
-This repository is archived because it is meant to be read-only; the project is not abandoned. For any issues, please report them to the main Magisk repository.
-
-## API
-
-- The canonical URL of the latest public Zygisk API is [module/jni/zygisk.hpp](https://github.com/topjohnwu/zygisk-module-sample/blob/master/module/jni/zygisk.hpp).
-- The header file is self documented; directly refer to the header source code for all Zygisk API details.
-- Magisk is committed to maintain backwards compatibility forever. That is, whenever there is an API update for Zygisk in a newer Magisk version, Magisk can always load Zygisk modules built for an older Zygisk API.
-- If you do not need the new features introduced in newer API versions, it's perfectly fine to stay on the older API version to maintain maximum compatibility.
-
-|                                         Zygisk API                                          | Minimal Magisk |                                          Diff                                          |
-| :-----------------------------------------------------------------------------------------: | :------------: | :------------------------------------------------------------------------------------: |
-|  [v5](https://github.com/topjohnwu/zygisk-module-sample/blob/master/module/jni/zygisk.hpp)  |     27000      |  [v4..v5](https://github.com/topjohnwu/zygisk-module-sample/compare/master~1..master)  |
-| [v4](https://github.com/topjohnwu/zygisk-module-sample/blob/master~1/module/jni/zygisk.hpp) |     26000      | [v3..v4](https://github.com/topjohnwu/zygisk-module-sample/compare/master~2..master~1) |
-| [v3](https://github.com/topjohnwu/zygisk-module-sample/blob/master~2/module/jni/zygisk.hpp) |     24300      | [v2..v3](https://github.com/topjohnwu/zygisk-module-sample/compare/master~3..master~2) |
-| [v2](https://github.com/topjohnwu/zygisk-module-sample/blob/master~3/module/jni/zygisk.hpp) |     24000      |                                          N/A                                           |
-
-## Notes
-
-- This repository can be opened with Android Studio.
-- Developing Zygisk modules requires a modern C++ compiler. Please use NDK r21 or higher.
-- All the C++ code is in the [module/jni](https://github.com/topjohnwu/zygisk-module-sample/tree/master/module/jni) folder.
-- DO NOT modify the default configurations in `Application.mk` unless you know what you are doing.
-
-## C++ STL
-
-- The `APP_STL` variable in `Application.mk` is set to `none`. **DO NOT** use any C++ STL included in NDK.
-- If you'd like to use C++ STL, you **have to** use the `libcxx` included as a git submodule in this repository. Zygisk modules' code are injected into Zygote, and the included `libc++` is setup to be lightweight and fully self contained that prevents conflicts with the hosting program.
-- If you do not need STL, link to the system `libstdc++` so that you can at least call the `new` operator.
-- Both configurations are demonstrated in the example `Android.mk`.
+Requires **Magisk v27.0+** (Zygisk API v5) with Zygisk enabled.
 
 ## Building
 
-- In the `module` folder, call [`ndk-build`](https://developer.android.com/ndk/guides/ndk-build) to compile your modules.
-- Your module libraries will be in `libs/<abi>/lib<module_name>.so`.
-- Copy the libraries into your module's `zygisk` folder, with the ABI as it's file name:
+### Requirements
+
+- JDK 17 or newer (Android Studio's bundled JBR works)
+- Android SDK with **platform `android-37.0`**
+- Android **NDK r30 (`30.0.16248370`)**, pinned in [module/build.gradle.kts](module/build.gradle.kts).
+  The bundled `libcxx` requires clang 21, so older NDKs fail to compile it.
+  Install it with Android Studio's SDK Manager or
+  `sdkmanager "ndk;30.0.16248370"`.
+
+### Clone
+
+The C++ standard library is a git submodule, so clone recursively:
+
+```sh
+git clone --recursive https://github.com/misaka-20002/gesture_switch.git
+# or, in an existing clone:
+git submodule update --init
+```
+
+### Build
+
+Point Gradle at your SDK with `ANDROID_HOME` or a `local.properties` file
+(`sdk.dir=...`, not committed), then:
+
+```sh
+./gradlew build          # Windows: gradlew.bat build
+```
+
+The flashable modules are written to `module/build/outputs/magisk/`:
+
+| File | Contents |
+|---|---|
+| `gesture_switch-<version>-release.zip` | release build |
+| `gesture_switch-<version>-debug.zip` | debug build (unoptimized) |
+
+`./gradlew zipRelease` builds just the release zip. Install it from the Magisk
+app (Modules → Install from storage) and reboot.
+
+Module id, name, version and description are set at the top of
+[module/build.gradle.kts](module/build.gradle.kts) and written into `module.prop`.
+
+### Layout
 
 ```
-module_id
-├── module.prop
-└── zygisk
-    ├── arm64-v8a.so
-    ├── armeabi-v7a.so
-    ├── x86.so
-    └── x86_64.so
+module/
+├── build.gradle.kts     Gradle build + zip<Variant> packaging task
+├── jni/
+│   ├── Android.mk       ndk-build script
+│   ├── Application.mk   ABIs, C++ flags, API level
+│   ├── main.cpp         module code
+│   ├── zygisk.hpp       Zygisk API v5 header (do not modify)
+│   └── libcxx/          submodule: lightweight, self-contained libc++
+└── magisk/              files copied into the module zip
+    ├── module.prop      template, filled in by Gradle
+    ├── customize.sh     install-time checks
+    └── META-INF/        standard Magisk installer stub
 ```
 
-## License
+## Notes
 
-Although the main Magisk project is licensed under GPLv3, the Zygisk API and its headers are not. Every source code in this repository is released under 0BSD (a public domain equivalent license), so you don't have to worry about any licensing issues while developing Zygisk modules.
+- Code in `pre[XXX]Specialize` runs in **every** app process and in
+  system_server before specialization: keep it fast and never block for long.
+- `APP_STL` is `none` on purpose. Use the bundled `libcxx` (as the build does),
+  never an NDK STL: module code is injected into zygote-forked processes and must
+  stay self-contained. Without libcxx you only have C headers (`<stdlib.h>`, not
+  `<cstdlib>`); see the commented alternative in `Android.mk`.
+- The Zygisk API is documented in [module/jni/zygisk.hpp](module/jni/zygisk.hpp).
+
+## Credits
+
+Based on [topjohnwu/zygisk-module-sample](https://github.com/topjohnwu/zygisk-module-sample).
+The Zygisk API header and the original sample code are released under 0BSD.

@@ -1,0 +1,11 @@
+* text=auto
+
+# Shell scripts must keep LF endings or they fail on the device / on Linux CI.
+gradlew                          text eol=lf
+*.sh                             text eol=lf
+module/magisk/module.prop        text eol=lf
+module/magisk/META-INF/**        text eol=lf
+
+*.bat                            -text
+*.jar                            binary
+*.so                             binary

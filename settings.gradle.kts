@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "zygisk-module-sample"
+rootProject.name = "gesture_switch"
 include(":module")

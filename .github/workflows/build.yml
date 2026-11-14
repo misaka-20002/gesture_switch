@@ -1,0 +1,46 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with libcxx submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Android SDK platform and NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platforms;android-37.0" "ndk;30.0.16248370" > /dev/null
+
+      - name: Build
+        run: ./gradlew build --no-daemon
+
+      - name: Upload release module
+        uses: actions/upload-artifact@v4
+        with:
+          name: gesture_switch-release
+          path: module/build/outputs/magisk/gesture_switch-*-release.zip
+          if-no-files-found: error
+
+      - name: Upload debug module
+        uses: actions/upload-artifact@v4
+        with:
+          name: gesture_switch-debug
+          path: module/build/outputs/magisk/gesture_switch-*-debug.zip
+          if-no-files-found: error
