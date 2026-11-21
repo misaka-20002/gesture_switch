@@ -2,9 +2,9 @@
  *
  * Apps:          nothing is done; the library asks to be unloaded.
  * system_server: classes.dex and config.prop are read from the module directory in
- *                preServerSpecialize (the only time the module dir is reachable; all fds
- *                must be closed before returning), then in postServerSpecialize the dex is
+ *                preServerSpecialize, then in postServerSpecialize the dex is
  *                loaded with InMemoryDexClassLoader and Entry.start(config, late) is called.
+ *                NeoZygisk also calls this pair when attaching to a live system_server.
  *                All real work happens in Java; no JNI natives or hooks are installed, so
  *                the library is dlclose'd afterwards.
  *
@@ -53,13 +53,15 @@ struct Buffer {
 // Read a whole file relative to dirfd into a NUL-terminated heap buffer. The fd is always closed.
 // Returns nullptr on success, otherwise a description of what failed.
 static const char *read_file_at(int dirfd, const char *name, Buffer &out) {
-    int fd = openat(dirfd, name, O_RDONLY | O_CLOEXEC);
+    int fd = openat(dirfd, name, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
     if (fd < 0) return strerror(errno);
 
     const char *error = nullptr;
     struct stat st{};
     if (fstat(fd, &st) != 0) {
         error = strerror(errno);
+    } else if (!S_ISREG(st.st_mode)) {
+        error = "not a regular file";
     } else if (st.st_size <= 0) {
         error = "empty file";
     } else if (static_cast<size_t>(st.st_size) > kMaxFileSize) {
@@ -113,23 +115,27 @@ public:
     }
 
     void preServerSpecialize(ServerSpecializeArgs *args) override {
-        late = (args->runtime_flags & kLateInjectFlag) != 0;
+        late = args && (args->runtime_flags & kLateInjectFlag) != 0;
 
         int dirfd = api->getModuleDir();
         if (dirfd < 0) {
-            LOGW("getModuleDir failed");
+            LOGW("getModuleDir failed (late=%d)", late);
             return;
         }
         if (const char *error = read_file_at(dirfd, kDexName, dex)) {
-            LOGW("cannot read %s: %s", kDexName, error);
-        }
-        if (!read_file_at(dirfd, kConfigName, config)) {  // optional, defaults otherwise
-            sanitize_ascii(config);
+            LOGW("cannot read %s (late=%d): %s", kDexName, late, error);
+        } else {
+            if (const char *error = read_file_at(dirfd, kConfigName, config)) {
+                LOGW("cannot read %s (late=%d), using defaults: %s", kConfigName, late, error);
+            } else {
+                sanitize_ascii(config);
+            }
         }
         close(dirfd);
     }
 
     void postServerSpecialize(const ServerSpecializeArgs *) override {
+        // In late-load this is the JNI environment of NeoZygisk's attached worker.
         if (dex.data) {
             loadDex();
         }

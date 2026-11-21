@@ -1,0 +1,78 @@
+:root {
+  color-scheme: light dark;
+  font-family: Inter, Roboto, system-ui, sans-serif;
+  background: light-dark(#f4f6fb, #10141d);
+  color: light-dark(#182138, #eef2ff);
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  box-sizing: border-box;
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem;
+}
+
+h1 {
+  margin: 0 0 1.25rem;
+  font-size: 1.65rem;
+}
+
+fieldset {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.625rem;
+  min-width: 0;
+  margin: 0;
+  padding: 1.25rem;
+  border: 1px solid light-dark(#d9dfeb, #3b455a);
+  border-radius: 1rem;
+  background: light-dark(#fff, #1b2230);
+}
+
+label {
+  font-weight: 600;
+}
+
+select, input, button {
+  box-sizing: border-box;
+  min-height: 3rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 0.65rem;
+  font: inherit;
+}
+
+select, input {
+  margin-bottom: 0.5rem;
+  border: 1px solid light-dark(#9ba8c0, #67738c);
+  background: light-dark(#f8faff, #242e40);
+}
+
+#debounce-help {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+button {
+  border: 0;
+  background: light-dark(#214caf, #b6c9ff);
+  color: light-dark(#fff, #102755);
+  font-weight: 650;
+}
+
+button:disabled {
+  opacity: 0.55;
+}
+
+:focus-visible {
+  outline: 2px solid light-dark(#214caf, #b6c9ff);
+  outline-offset: 3px;
+}
+
+#status {
+  min-height: 1.5em;
+  line-height: 1.5;
+}

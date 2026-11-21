@@ -27,10 +27,10 @@ final class Config {
             try {
                 switch (key) {
                     case "folded_mode":
-                        cfg.foldedMode = mode(value, cfg.foldedMode);
+                        cfg.foldedMode = modeOrDefault(value, cfg.foldedMode);
                         break;
                     case "open_mode":
-                        cfg.openMode = mode(value, cfg.openMode);
+                        cfg.openMode = modeOrDefault(value, cfg.openMode);
                         break;
                     case "folded_states":
                         cfg.foldedStates = value.isEmpty() ? null : ids(value);
@@ -48,10 +48,15 @@ final class Config {
         return cfg;
     }
 
-    private static String mode(String value, String fallback) {
+    static boolean isMode(String value) {
         for (String m : MODES) {
-            if (m.equals(value)) return m;
+            if (m.equals(value)) return true;
         }
+        return false;
+    }
+
+    private static String modeOrDefault(String value, String fallback) {
+        if (isMode(value)) return value;
         Log.w(Entry.TAG, "unknown mode '" + value + "', keeping " + fallback);
         return fallback;
     }

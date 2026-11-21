@@ -11,8 +11,8 @@ val moduleId = "gesture_switch"
 val moduleName = "Gesture Switch"
 val moduleAuthor = "misaka-20002"
 val moduleDescription = "Switches navigation mode by fold state on flip phones (3-button folded, gestures open)"
-val moduleVersionName = "v0.1.0"
-val moduleVersionCode = 1
+val moduleVersionName = "v0.1.5"
+val moduleVersionCode = 6
 
 val moduleProps = mapOf(
     "id" to moduleId,

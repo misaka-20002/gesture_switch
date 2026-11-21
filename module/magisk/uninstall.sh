@@ -3,24 +3,7 @@
 # the folded mode (e.g. 3-button) after uninstalling.
 
 MODDIR=${0%/*}
-MODE=$(LC_ALL=C awk '
-  function trim(s) {
-    sub(/^[[:space:]]+/, "", s)
-    sub(/[[:space:]]+$/, "", s)
-    return s
-  }
-  {
-    eq = index($0, "=")
-    if (eq == 0 || trim(substr($0, 1, eq - 1)) != "open_mode") next
-    value = trim(substr($0, eq + 1))
-    if (value ~ /^(gestural|threebutton|twobutton)$/) mode = value
-  }
-  END { if (mode != "") print mode }
-' "$MODDIR/config.prop" 2>/dev/null)
-case "$MODE" in
-  gestural|threebutton|twobutton) ;;
-  *) MODE=gestural ;;
-esac
+MODE=$(sh "$MODDIR/settings.sh" open-mode) || MODE=gestural
 
 (
   until [ "$(getprop sys.boot_completed)" = "1" ]; do

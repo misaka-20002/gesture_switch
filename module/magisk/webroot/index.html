@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; form-action 'none'; base-uri 'none'">
+  <title>Gesture Switch</title>
+  <link rel="stylesheet" href="./settings.css">
+  <script defer src="./settings.js"></script>
+</head>
+<body>
+  <main>
+    <h1>导航模式</h1>
+    <form id="settings">
+      <fieldset id="fields" disabled>
+        <label for="folded">折叠 / 外屏</label>
+        <select id="folded"></select>
+        <label for="opened">展开 / 内屏</label>
+        <select id="opened"></select>
+        <label for="debounce">防抖等待（毫秒）</label>
+        <input id="debounce" type="number" inputmode="numeric" min="0" max="5000" step="1"
+               required aria-describedby="debounce-help">
+        <p id="debounce-help">0 表示收到状态变化后立即切换。</p>
+        <button id="save" type="submit" disabled>保存设置</button>
+      </fieldset>
+    </form>
+    <p id="status" role="status" aria-live="polite">正在读取设置…</p>
+  </main>
+</body>
+</html>

@@ -1,6 +1,7 @@
 package io.github.misaka20002.gestureswitch;
 
 import android.os.Handler;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.util.HashMap;
@@ -14,7 +15,11 @@ final class Controller {
     private final Config cfg;
     private final NavSwitcher nav;
     private final Handler handler;
-    private final Runnable apply = safe("apply", this::apply);
+    private final Runnable apply = safe("apply", () -> {
+        pendingSince = -1;
+        apply();
+    });
+    private long pendingSince = -1;
 
     /** Folded according to DeviceStateManager, or null if unknown. Preferred when known. */
     private Boolean deviceStateFolded;
@@ -43,12 +48,43 @@ final class Controller {
 
     /** Re-evaluate after the state has been stable for debounceMs (fold animations flap). */
     void schedule() {
+        pendingSince = SystemClock.uptimeMillis();
+        reschedule();
+    }
+
+    private void reschedule() {
         handler.removeCallbacks(apply);
-        handler.postDelayed(apply, cfg.debounceMs);
+        handler.postAtTime(apply, pendingSince + cfg.debounceMs);
+    }
+
+    void updateSettings(String foldedMode, String openMode, int debounceMs) {
+        boolean foldedChanged = !cfg.foldedMode.equals(foldedMode);
+        boolean openChanged = !cfg.openMode.equals(openMode);
+        boolean debounceChanged = cfg.debounceMs != debounceMs;
+        cfg.foldedMode = foldedMode;
+        cfg.openMode = openMode;
+        cfg.debounceMs = debounceMs;
+
+        if (foldedChanged || openChanged) {
+            lastApplied.values().removeIf(folded -> folded ? foldedChanged : openChanged);
+        }
+        if (pendingSince >= 0) {
+            if (debounceChanged) reschedule();
+        } else {
+            Boolean folded = currentFolded();
+            if (folded != null && (folded ? foldedChanged : openChanged)) {
+                handler.removeCallbacks(apply);
+                handler.post(apply);
+            }
+        }
+    }
+
+    private Boolean currentFolded() {
+        return deviceStateFolded != null ? deviceStateFolded : lidFolded;
     }
 
     private void apply() throws Exception {
-        Boolean folded = deviceStateFolded != null ? deviceStateFolded : lidFolded;
+        Boolean folded = currentFolded();
         if (folded == null) {
             Log.w(Entry.TAG, "fold state unknown; set folded_states in config.prop");
             return;

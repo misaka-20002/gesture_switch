@@ -20,7 +20,8 @@ the matching AOSP navigation-bar overlay, exactly like
 ## Install
 
 1. Flash `gesture_switch-<version>-release.zip` from the KernelSU (or Magisk) manager.
-2. Reboot.
+2. Reboot to activate a staged installation. An already active installation can also
+   start through NeoZygisk late-load.
 3. Check that it is working:
 
    ```sh
@@ -31,16 +32,41 @@ the matching AOSP navigation-bar overlay, exactly like
    `lid switch callback registered`, then a `device state … -> folded/open` line and
    `switch to threebutton/gestural` each time you fold or open the phone.
 
+### NeoZygisk late-load
+
+With a NeoZygisk build containing [late-load support](https://github.com/JingMatrix/NeoZygisk/pull/174),
+the provider runs the module's Zygisk callbacks in a live `system_server` during
+KernelSU late-load. Look for `ready (late=true)` in `adb logcat -s GestureSwitch`.
+The module registers one listener set per process. If this process already loaded
+an older version of Gesture Switch, restart Android once to load the updated code.
+
 ## Configuration
 
-Edit `/data/adb/modules/gesture_switch/config.prop` and reboot. It is kept across updates.
+- **KernelSU:** Open the module's WebUI from the Gesture Switch card. Choose a mode for each
+  posture, set the debounce delay in milliseconds and tap **保存设置** (Save). The page offers
+  modes that the current user can switch to.
+- **Magisk 28.0+:** Tap **Action** on the Gesture Switch card to switch between
+  three-button folded / gestural open and gestural folded / three-button open. The console
+  shows the saved selection.
+- **Manual:** Edit `/data/adb/modules/gesture_switch/config.prop` for custom state IDs,
+  debounce, or mode settings on older managers.
+
+The WebUI and Action apply navigation modes and debounce changes to the running module.
+If you edit the file manually, apply those same settings with:
+
+```sh
+adb shell "su -c 'sh /data/adb/modules/gesture_switch/settings.sh apply'"
+```
+
+Changes to `folded_states` take effect on the next module start. The configuration is
+kept across manager-installed updates.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `folded_mode` | `threebutton` | Mode when folded: `gestural`, `threebutton` or `twobutton` |
 | `open_mode` | `gestural` | Mode when open |
 | `folded_states` | empty (auto) | Comma-separated device state ids that count as folded |
-| `debounce_ms` | `400` | How long the state must be stable before switching |
+| `debounce_ms` | `400` | Stable-state delay in milliseconds, from `0` to `5000` |
 
 ### How folded is detected
 

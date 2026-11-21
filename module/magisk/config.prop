@@ -1,5 +1,6 @@
 # gesture_switch configuration. Edit in /data/adb/modules/gesture_switch/config.prop
-# and reboot to apply.
+# Run settings.sh apply after editing navigation modes or debounce.
+# Changing folded_states requires the module to start again.
 
 # Navigation mode per fold state: gestural | threebutton | twobutton
 folded_mode=threebutton
